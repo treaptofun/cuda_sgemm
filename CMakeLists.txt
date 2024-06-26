@@ -12,11 +12,16 @@ find_package(CUDA REQUIRED)
 # Include directories.
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
-# Add executable
+# Add executables
 cuda_add_executable(test_correctness
     src/test_correctness.cu
+    src/sgemm/v1_simple.cuh
+)
+cuda_add_executable(test_performance
+    src/test_performance.cu
     src/sgemm/v1_simple.cuh
 )
 
 # Link CUDA libraries.
 target_link_libraries(test_correctness ${CUDA_LIBRARIES})
+target_link_libraries(test_performance ${CUDA_LIBRARIES})
