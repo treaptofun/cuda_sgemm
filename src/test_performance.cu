@@ -6,25 +6,25 @@
 #include <iostream>
 #include <random>
 
-#include "sgemm/v2_blocktiling.cuh"
+#include "common.cuh"
 
-// Fills a matrix with random floats from [-1, 1] using mt19937.
-void init_matrix(const uint32_t M, const uint32_t N, float *A) {
-    std::random_device rd;
-    std::mt19937 engine(rd());
-    std::uniform_real_distribution<float> random_float(-1.0f, 1.0f);
-    for (uint32_t i = 0; i < M; ++i) {
-        for (uint32_t j = 0; j < N; ++j) {
-            A[i * N + j] = random_float(engine);
-        }
-    }
+double compute_num_flops(const uint32_t M, const uint32_t N, const uint32_t K) {
+    double Md = static_cast<double>(M),
+           Nd = static_cast<double>(N),
+           Kd = static_cast<double>(K);
+    return 2 * Md * Nd * Kd + Md * Nd;
 }
 
 // Benchmark SGEMM on given matrix sizes.
-void benchmark_sgemm(const uint32_t M, const uint32_t N, const uint32_t K) {
+void benchmark_sgemm(const int sgemm_version,
+                     const uint32_t M, const uint32_t N, const uint32_t K) {
     const float alpha = 1.0f, beta = 0.0f;
     const uint32_t NUM_WARMUP_RUNS = 5;
     const uint32_t NUM_RUNS = 5;
+
+    // Generating cuBLAS handle in case we want to run cuBLAS.
+    cublasHandle_t handle;
+    cublasCreate(&handle);
 
     float *A, *B, *C;
     float *A_device, *B_device, *C_device;
@@ -33,14 +33,19 @@ void benchmark_sgemm(const uint32_t M, const uint32_t N, const uint32_t K) {
     B = new float[K * N];
     C = new float[M * N];
 
+    cudaMalloc(&A_device, M * K * sizeof(float));
+    cudaMalloc(&B_device, K * N * sizeof(float));
+    cudaMalloc(&C_device, M * N * sizeof(float));
+
     // N * M size-K vector multiplications.
     // Each vector multiplication is 2 * K FLOPs.
     // --> 2 * N * M * K
     // Then add an N * M matrix.
     // --> N * M
-    const float num_flops = N * M * K * 2 + N * M;
+    // We'll compute it in double precision to avoid potential overflows.
+    const double num_flops = compute_num_flops(M, N, K);
     // We'll calculate the standard error using the second moment.
-    float gflops = 0.0f, squared_gflops = 0.0f;
+    double gflops = 0.0f, squared_gflops = 0.0f;
 
     for (uint32_t run_id = 0; run_id < NUM_WARMUP_RUNS + NUM_RUNS; ++run_id) {
         // Re-generate the matrix values.
@@ -48,33 +53,39 @@ void benchmark_sgemm(const uint32_t M, const uint32_t N, const uint32_t K) {
         init_matrix(K, N, B);
         init_matrix(M, N, C);
 
-        cudaMalloc(&A_device, M * K * sizeof(float));
-        cudaMalloc(&B_device, K * N * sizeof(float));
-        cudaMalloc(&C_device, M * N * sizeof(float));
-
         cudaMemcpy(A_device, A, M * K * sizeof(float), cudaMemcpyHostToDevice);
         cudaMemcpy(B_device, B, K * N * sizeof(float), cudaMemcpyHostToDevice);
         cudaMemcpy(C_device, C, M * N * sizeof(float), cudaMemcpyHostToDevice);
 
         auto sgemm_start_time = std::chrono::high_resolution_clock::now();
-        sgemm(M, N, K, alpha, A_device, B_device, beta, C_device);
+        if (sgemm_version == 0) {
+            // If sgemm_version == 0 we call cuBLAS.
+            v0::sgemm(
+                M, N, K, alpha, A_device, B_device, beta, C_device, handle);
+        } else {
+            // Get the chosen SGEMM function version.
+            SGEMMFunc sgemm_func = SGEMM_FUNCS[sgemm_version - 1];
+            sgemm_func(M, N, K, alpha, A_device, B_device, beta, C_device);
+        }
         // Synchronize to make sure kernel finished execution.
         cudaDeviceSynchronize();
         auto sgemm_end_time = std::chrono::high_resolution_clock::now();
 
         if (run_id >= NUM_WARMUP_RUNS) {
-            auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                sgemm_end_time - sgemm_start_time).count();
+            auto duration = (
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    sgemm_end_time - sgemm_start_time).count()
+            );
             // 1e9 in flops and ns cancel each other out.
-            float current_run_gflops = num_flops / duration;
+            double current_run_gflops = num_flops / duration;
             gflops += current_run_gflops;
             squared_gflops += current_run_gflops * current_run_gflops;
         }
     }
 
-    float gflops_mean = gflops / NUM_RUNS;
+    double gflops_mean = gflops / NUM_RUNS;
     // V[x] = E[X ^ 2] - E[X] ^ 2
-    float gflops_stderr = std::sqrt(
+    double gflops_stderr = std::sqrt(
         (squared_gflops / NUM_RUNS - gflops_mean * gflops_mean) / NUM_RUNS
     );
 
@@ -82,11 +93,34 @@ void benchmark_sgemm(const uint32_t M, const uint32_t N, const uint32_t K) {
               << std::setprecision(3) << std::fixed
               << " GFLOPs/s " << gflops_mean
               << " ± " << gflops_stderr << std::endl;
+
+    // Free memory.
+    delete[] A;
+    delete[] B;
+    delete[] C;
+    cudaFree(A_device);
+    cudaFree(B_device);
+    cudaFree(C_device);
+
+    // Destroying the cuBLAS handle.
+    cublasDestroy(handle);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        std::cerr << "Please specify the version: "
+                  << argv[0] << " <version>" << std::endl;
+        return 1;
+    }
+    const int sgemm_version = std::atoi(argv[1]);
+    if (sgemm_version < 0 || sgemm_version > NUM_SGEMM_VERSIONS) {
+        std::cerr << "Version must be between 0 and " << NUM_SGEMM_VERSIONS
+                 << std::endl;
+        return 1;
+    }
+
     const uint32_t NUM_SHAPES = 3;
-    const float matrix_shapes[NUM_SHAPES][3] = {
+    const uint32_t MATRIX_SHAPES[NUM_SHAPES][3] = {
         {4096, 4096, 4096},
         {2048, 2048, 2048},
         {1024, 1024, 1024},
@@ -94,9 +128,10 @@ int main() {
 
     for (uint32_t i = 0; i < NUM_SHAPES; ++i) {
         benchmark_sgemm(
-            matrix_shapes[i][0],
-            matrix_shapes[i][1],
-            matrix_shapes[i][2]
+            sgemm_version,
+            MATRIX_SHAPES[i][0],
+            MATRIX_SHAPES[i][1],
+            MATRIX_SHAPES[i][2]
         );
     }
 

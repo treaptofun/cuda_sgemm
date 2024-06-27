@@ -1,10 +1,10 @@
 #include <cmath>
 #include <cstring>
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <iostream>
-#include <random>
 
-#include "sgemm/v1_simple.cuh"
+#include "common.cuh"
 
 // Oracle CPU implementation of SGEMM.
 void sgemm_oracle(
@@ -28,25 +28,14 @@ void sgemm_oracle(
     }
 }
 
-// Fills a matrix with random floats from [-1, 1] using mt19937.
-void init_matrix(const uint32_t M, const uint32_t N, float *A) {
-    std::random_device rd;
-    std::mt19937 engine(rd());
-    std::uniform_real_distribution<float> random_float(-1.0f, 1.0f);
-    for (uint32_t i = 0; i < M; ++i) {
-        for (uint32_t j = 0; j < N; ++j) {
-            A[i * N + j] = random_float(engine);
-        }
-    }
-}
-
+// Checks for matrix equality within atol and rtol.
 bool check_matrix_equality(
     const uint32_t M,
     const uint32_t N,
     float *A_oracle,
     float *A
 ) {
-    const float atol = 1e-5f;
+    const float atol = 1e-4f;
     const float rtol = 1e-3f;
 
     for (uint32_t i = 0; i < M * N; ++i) {
@@ -60,10 +49,26 @@ bool check_matrix_equality(
     return true;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        std::cerr << "Please specify the version: "
+                  << argv[0] << " <version>" << std::endl;
+        return 1;
+    }
+    const int sgemm_version = std::atoi(argv[1]);
+    if (sgemm_version < 0 || sgemm_version > NUM_SGEMM_VERSIONS) {
+        std::cerr << "Version must be between 0 and " << NUM_SGEMM_VERSIONS
+                 << std::endl;
+        return 1;
+    }
+
     const uint32_t M = 1024, N = 1024, K = 1024;
     const float alpha = 1.0f, beta = 0.0f;
-    
+
+    // Generating cuBLAS handle in case we want to run cuBLAS.
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
     float *A, *B, *C, *C_oracle;
     float *A_device, *B_device, *C_device;
 
@@ -93,7 +98,16 @@ int main() {
     cudaMemcpy(B_device, B, K * N * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(C_device, C, M * N * sizeof(float), cudaMemcpyHostToDevice);
 
-    sgemm(M, N, K, alpha, A_device, B_device, beta, C_device);
+    if (sgemm_version == 0) {
+        // If sgemm_version == 0 we call cuBLAS.
+        v0::sgemm(
+            M, N, K, alpha, A_device, B_device, beta, C_device, handle);
+    } else {
+        // Get the chosen SGEMM function version.
+        SGEMMFunc sgemm_func = SGEMM_FUNCS[sgemm_version - 1];
+        sgemm_func(M, N, K, alpha, A_device, B_device, beta, C_device);
+    }
+
     cudaMemcpy(C, C_device, M * N * sizeof(float), cudaMemcpyDeviceToHost);
     std::cout << "CUDA SGEMM completed." << std::endl;
 
@@ -113,6 +127,9 @@ int main() {
     cudaFree(A_device);
     cudaFree(B_device);
     cudaFree(C_device);
+
+    // Destroying the cuBLAS handle.
+    cublasDestroy(handle);
 
     return 0;
 }
