@@ -4,6 +4,7 @@
 
 #include "sgemm/v0_cublas.cuh"
 #include "sgemm/v1_simple.cuh"
+#include "sgemm/v2_block_tiling.cuh"
 
 typedef void (*SGEMMFunc)(
     const uint32_t M,
@@ -16,9 +17,10 @@ typedef void (*SGEMMFunc)(
     float *C
 );
 
-const uint32_t NUM_SGEMM_VERSIONS = 1;
+const uint32_t NUM_SGEMM_VERSIONS = 2;
 const SGEMMFunc SGEMM_FUNCS[NUM_SGEMM_VERSIONS] = {
     v1::sgemm,
+    v2::sgemm,
 };
 
 // Fills a matrix with random floats from [-1, 1] using mt19937.
