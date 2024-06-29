@@ -12,6 +12,8 @@ We don't bother with sizes that are not divisible by BLOCK_SIZE for now.
 
 namespace v1 {
 
+// Block size.
+// Here, each 2D block will consist of 32x32 threads.
 constexpr uint32_t BLOCK_SIZE = 32;
 
 // This is a neat formula for a ceil division so that we can avoid floats.
@@ -30,6 +32,7 @@ __global__ void sgemm_kernel(
     const float beta,
     float *C
 ) {
+    // TODO: make an illustration about threads.
     const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     const uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -53,6 +56,7 @@ void sgemm(
     const float beta,
     float *C
 ) {
+    // TODO: explain what is happening here.
     const dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
     const dim3 dimGrid(ceil_div(M, BLOCK_SIZE), ceil_div(N, BLOCK_SIZE));
     sgemm_kernel<<<dimGrid, dimBlock>>>(M, N, K, alpha, A, B, beta, C);

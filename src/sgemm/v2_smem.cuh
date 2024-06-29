@@ -8,6 +8,11 @@ namespace v2 {
 constexpr uint32_t BLOCK_SIZE = 32;
 
 // We have to make this a macro because we can't call host functions on device.
+//
+// We can also call other functions inside a kernel using __device__ keyword,
+// but I figured this is easier. I'm also not sure if we can call __device__
+// functions on host (probably not), and making two separate ceil div functions
+// for host and device sounds wacky.
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
 // SGEMM kernel implementation.
@@ -66,9 +71,14 @@ __global__ void sgemm_kernel(
     // This gives us a theoretical speedup of 32x assuming everything else is
     // instanteneous. In reality doing just this gives us approximately 10x
     // compared to v1, so lower than 32, but still very significant.
+    //
+    // This is the "global memory coalescing" optimization:
+    //
+    const uint32_t thread_i = threadIdx.y;  // [!!!] note that it's y, not x.
+    const uint32_t thread_j = threadIdx.x;  // [!!!] note that it's x, not y.
+    //
+    // That's it. That simple.
 
-    const uint32_t thread_i = threadIdx.y;
-    const uint32_t thread_j = threadIdx.x;
     const uint32_t i = blockIdx.x * blockDim.x + thread_i;
     const uint32_t j = blockIdx.y * blockDim.y + thread_j;
 
@@ -77,6 +87,7 @@ __global__ void sgemm_kernel(
         return;
     }
 
+    // TODO: make an illustration for SMEM as well.
     __shared__ float A_chunk[BLOCK_SIZE * BLOCK_SIZE];
     __shared__ float B_chunk[BLOCK_SIZE * BLOCK_SIZE];
 
@@ -106,27 +117,33 @@ __global__ void sgemm_kernel(
         }
 
         // We sync threads to avoid faster ones ruining A(B)_chunk.
+        //
+        // If a thread finishes its part of the chunk-level iteration it could
+        // theoretically run forward and load new values from the next chunk
+        // into A_chunk and B_chunk. This would be bad because slower threads
+        // that are still on the previous iteration rely on this data and the
+        // computation would be invalidated.
+        //
         __syncthreads();
     }
 
     C[i * N + j] = alpha * accumulate + beta * C[i * N + j];
 }
 
-// Call SGEMM kernel.
-    void sgemm(
-        const uint32_t M,
-        const uint32_t N,
-        const uint32_t K,
-        const float alpha,
-        const float *A,
-        const float *B,
-        const float beta,
-        float *C
-    ) {
-        const dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
-        const dim3 dimGrid(CEIL_DIV(M, BLOCK_SIZE), CEIL_DIV(N, BLOCK_SIZE));
-        sgemm_kernel<<<dimGrid, dimBlock>>>(M, N, K, alpha, A, B, beta, C);
-        cudaDeviceSynchronize();
-    }
+void sgemm(
+    const uint32_t M,
+    const uint32_t N,
+    const uint32_t K,
+    const float alpha,
+    const float *A,
+    const float *B,
+    const float beta,
+    float *C
+) {
+    const dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
+    const dim3 dimGrid(CEIL_DIV(M, BLOCK_SIZE), CEIL_DIV(N, BLOCK_SIZE));
+    sgemm_kernel<<<dimGrid, dimBlock>>>(M, N, K, alpha, A, B, beta, C);
+    cudaDeviceSynchronize();
+}
 
 } // namespace v2
