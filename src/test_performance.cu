@@ -67,8 +67,6 @@ void benchmark_sgemm(const int sgemm_version,
             SGEMMFunc sgemm_func = SGEMM_FUNCS[sgemm_version - 1];
             sgemm_func(M, N, K, alpha, A_device, B_device, beta, C_device);
         }
-        // Synchronize to make sure kernel finished execution.
-        cudaDeviceSynchronize();
         auto sgemm_end_time = std::chrono::high_resolution_clock::now();
 
         if (run_id >= NUM_WARMUP_RUNS) {

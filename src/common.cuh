@@ -4,8 +4,8 @@
 
 #include "sgemm/v0_cublas.cuh"
 #include "sgemm/v1_simple.cuh"
-#include "sgemm/v2_block_tiling.cuh"
-#include "sgemm/v3_block_tiling.cuh"
+#include "sgemm/v2_smem.cuh"
+#include "sgemm/v3_blocktiling.cuh"
 
 // Custom SGEMM kernel function pointer type.
 typedef void (*SGEMMFunc)(
@@ -20,7 +20,7 @@ typedef void (*SGEMMFunc)(
 );
 
 // Registry with all custom SGEMM kernels.
-const uint32_t NUM_SGEMM_VERSIONS = 2;
+const uint32_t NUM_SGEMM_VERSIONS = 3;
 const SGEMMFunc SGEMM_FUNCS[NUM_SGEMM_VERSIONS] = {
     v1::sgemm,
     v2::sgemm,

@@ -79,8 +79,8 @@ __global__ void sgemm_kernel(
     //
     // That's it. That simple.
 
-    const uint32_t i = blockIdx.x * blockDim.x + thread_i;
-    const uint32_t j = blockIdx.y * blockDim.y + thread_j;
+    const uint32_t i = blockIdx.x * BLOCK_SIZE + thread_i;
+    const uint32_t j = blockIdx.y * BLOCK_SIZE + thread_j;
 
     if (i >= M || j >= N) {
         // Don't do anything if we're out of bounds.

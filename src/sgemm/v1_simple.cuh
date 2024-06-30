@@ -33,8 +33,8 @@ __global__ void sgemm_kernel(
     float *C
 ) {
     // TODO: make an illustration about threads.
-    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    const uint32_t j = blockIdx.y * blockDim.y + threadIdx.y;
+    const uint32_t i = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    const uint32_t j = blockIdx.y * BLOCK_SIZE + threadIdx.y;
 
     if (i < M && j < N) {
         float accumulate = 0.0f;
